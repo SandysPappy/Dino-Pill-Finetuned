@@ -13,7 +13,7 @@ import torchvision.transforms as T
 import torch.distributed as dist
 from torchvision.io import read_image
 from PIL import Image 
-from dataset_loader import get_epill_dataloader
+from dataset_loaders import get_epill_dataloader
 
 def initDinoV1Model(model_to_load, FLAGS, checkpoint_key="teacher", use_back_bone_only=False):
     dino_args.pretrained_weights = model_to_load
@@ -113,25 +113,68 @@ if __name__=="__main__":
     print("result:", pred)
     '''
 
-    ref_data = get_epill_dataloader('refs', FLAGS.batch_size, True)
-    holdout_data = get_epill_dataloader('get_epill_dataloader', FLAGS.batch_size, True)
+    #ref_data = get_epill_dataloader('refs', FLAGS.batch_size, True)
+    holdout_data = get_epill_dataloader('holdout', FLAGS.batch_size, True)
 
     # extract feature
-
+    save_feature_path = "datasets/ref_feature/"
     ref_feature = {}
-
-    for image, label, is_front, is_ref in ref_data:
-        feature = dinov1_model(image) 
-        for i in range(FLAGS.batch_size):
-            
-            ref_feature[label[i]] = feature[i]
-
-    holdout_data_feature = {}
-
-    for image, label, is_front, is_ref in holdout_data_data:
+    '''
+    for batch in ref_data:
+        image = batch['image']
+        label = batch['label']
+        image = image.to("cuda")
         feature = dinov1_model(image)
+        feature = feature.to("cpu") 
+        label = label.to("cpu")
+        print(label.device)
+        label = label.tolist()
+        
+        print(feature.device)
         for i in range(FLAGS.batch_size):
-            ref_feature[label[i]] = feature[i]
+            if label[i] not in ref_feature:
+                ref_feature[label[i]] = [None, None]
+            if batch['is_front'][i] == 'True':
+                ref_feature[label[i]][1]=feature[i]
+            else:
+                ref_feature[label[i]][0]=feature[i]            
+    
+    print("===ref feature===")
+    print(ref_feature)
+    print(len(ref_feature))
+    '''
+    
+    holdout_features = []
+    holdout_labels = []
+    i = 0
+    
+    for batch in holdout_data:
+        if i == 1:
+            break
+        print(torch.cuda.memory_allocated())
+        image = batch['image']
+        label = batch['label']
+        image = image.to("cuda")
+        feature = dinov1_model(image).clone()
+        feature = feature.to("cpu")
+        label = label.to("cpu")
+        label = label.tolist()
+        
+        for x in feature:
+            holdout_features.append(x)
+        for x in label:
+            holdout_labels.append(x)
+        i += 1
+    print("===holdout feature===")
+    print(holdout_features)
+    print(len(holdout_features))
+    print(holdout_labels)
+    print(len(holdout_labels)) 
+
+
+
+
+
 
 
 
