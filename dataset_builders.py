@@ -1,6 +1,7 @@
 import csv
 import os
 import numpy as np
+from sklearn.preprocessing import LabelEncoder
 import torch
 from torch.utils.data import Dataset
 from torchvision.io import read_image
@@ -49,6 +50,16 @@ class EPillDataset(Dataset):
             self.label_index_keys = next(csv_reader) 
             for label in csv_reader:
                 self.labels.append(label)
+
+        # encode the gross strings into integers (0, numclasses-1)
+        ids = []
+        for label in self.labels:
+            ids.append(label[1]) # pilltype_id
+        le = LabelEncoder()
+        le.fit(ids)
+        ids = list(le.transform(ids))
+        for i, id in enumerate(ids):
+            self.labels[i][1] = id
 
         # set images as list of torch tensors 
         for label in self.labels:
@@ -179,11 +190,11 @@ if __name__ == '__main__':
         dataset_holdout
     ]
 
-    for dataset in datasets:
-        # checking if all only contains reference images
-        for labels in dataset:
-            if labels["is_ref"] == True:
-                print(labels)
+    # for dataset in datasets:
+    #     # checking if all only contains reference images
+    #     for labels in dataset:
+    #         if labels["is_ref"] == True:
+    #             print(labels)
 
     # for dataset in datasets:
     #     print(len(dataset))
