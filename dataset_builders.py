@@ -49,6 +49,11 @@ class EPillDataset(Dataset):
 
             self.label_index_keys = next(csv_reader) 
             for label in csv_reader:
+                for i, _ in enumerate(label):
+                    if label[i] == 'True':
+                        label[i] = True
+                    if label[i] == 'False':
+                        label[i] = False
                 self.labels.append(label)
 
         # encode the gross strings into integers (0, numclasses-1)
