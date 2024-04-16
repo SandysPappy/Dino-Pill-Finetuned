@@ -13,6 +13,7 @@ import torchvision.transforms as T
 import torch.distributed as dist
 from torchvision.io import read_image
 from PIL import Image 
+from dataset_loader import get_epill_dataloader
 
 def initDinoV1Model(model_to_load, FLAGS, checkpoint_key="teacher", use_back_bone_only=False):
     dino_args.pretrained_weights = model_to_load
@@ -91,7 +92,7 @@ if __name__=="__main__":
 
     dinov1_model = initDinoV1Model(model_to_load=FLAGS.dino_base_model_weights,FLAGS=FLAGS,checkpoint_key="teacher", use_back_bone_only=False)
 
-
+    '''
     data_path = "./data/ePillID_data/classification_data/segmented_nih_pills_224/"
     dinov1_transform = T.Compose([    
             T.Resize((224,224)),
@@ -110,7 +111,33 @@ if __name__=="__main__":
     pred = dinov1_model(batch)
 
     print("result:", pred)
+    '''
 
+    ref_data = get_epill_dataloader('refs', FLAGS.batch_size, True)
+    holdout_data = get_epill_dataloader('get_epill_dataloader', FLAGS.batch_size, True)
+
+    # extract feature
+
+    ref_feature = {}
+
+    for image, label, is_front, is_ref in ref_data:
+        feature = dinov1_model(image) 
+        for i in range(FLAGS.batch_size):
+            
+            ref_feature[label[i]] = feature[i]
+
+    holdout_data_feature = {}
+
+    for image, label, is_front, is_ref in holdout_data_data:
+        feature = dinov1_model(image)
+        for i in range(FLAGS.batch_size):
+            ref_feature[label[i]] = feature[i]
+
+
+
+
+
+    
 
 
 
