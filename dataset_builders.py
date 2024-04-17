@@ -10,7 +10,7 @@ from imgaug import augmenters as iaa
 from PIL import Image
 
 # set use_epill_transforms=True to transform input image when calling __get__
-def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=True):
+def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True):
     if fold == None:
         raise KeyError("Please insert which fold to use")
 
