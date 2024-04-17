@@ -14,6 +14,11 @@ import torch.distributed as dist
 from torchvision.io import read_image
 from PIL import Image 
 from dataset_loaders import get_epill_dataloader
+from tqdm import tqdm
+from numpy import dot
+from numpy.linalg import norm
+import torch.nn.functional as F
+
 
 def initDinoV1Model(model_to_load, FLAGS, checkpoint_key="teacher", use_back_bone_only=False):
     dino_args.pretrained_weights = model_to_load
@@ -113,69 +118,83 @@ if __name__=="__main__":
     print("result:", pred)
     '''
 
-    #ref_data = get_epill_dataloader('refs', FLAGS.batch_size, True)
+    ref_data = get_epill_dataloader('refs', FLAGS.batch_size, True)
     holdout_data = get_epill_dataloader('holdout', FLAGS.batch_size, True)
 
     # extract feature
-    save_feature_path = "datasets/ref_feature/"
-    ref_feature = {}
-    '''
-    for batch in ref_data:
-        image = batch['image']
-        label = batch['label']
-        image = image.to("cuda")
-        feature = dinov1_model(image)
-        feature = feature.to("cpu") 
-        label = label.to("cpu")
-        print(label.device)
-        label = label.tolist()
-        
-        print(feature.device)
-        for i in range(FLAGS.batch_size):
-            if label[i] not in ref_feature:
-                ref_feature[label[i]] = [None, None]
-            if batch['is_front'][i] == 'True':
-                ref_feature[label[i]][1]=feature[i]
-            else:
-                ref_feature[label[i]][0]=feature[i]            
+    print("start extracting feature")
+    feature_path = "features/"
+    ref_features = []
+    ref_labels = []
     
-    print("===ref feature===")
-    print(ref_feature)
-    print(len(ref_feature))
-    '''
+    for batch in tqdm(ref_data):
+        images = batch['image']
+        labels = batch['label']
+        images = images.to("cuda")
+        #features = dinov1_model(images).clone()
+        #features = features.to("cpu")
+        #features = features.tolist()
+        labels = labels.to("cpu")
+        labels = labels.tolist()
+        '''
+        for x in features:
+            ref_features.append(x)
+        '''
+        for x in labels:
+            ref_labels.append(x)
+    #torch.save(ref_features, feature_path+"ref_features.pt")
+    print("loading ref_features...")
+    ref_features = torch.load(feature_path+"ref_features.pt")    
     
     holdout_features = []
     holdout_labels = []
-    i = 0
-    
-    for batch in holdout_data:
-        if i == 1:
-            break
-        print(torch.cuda.memory_allocated())
-        image = batch['image']
-        label = batch['label']
-        image = image.to("cuda")
-        feature = dinov1_model(image).clone()
-        feature = feature.to("cpu")
-        label = label.to("cpu")
-        label = label.tolist()
+ 
+    for batch in tqdm(holdout_data):
         
-        for x in feature:
+        images = batch['image']
+        labels = batch['label']
+        images = images.to("cuda")
+        #features = dinov1_model(images).clone()
+        #features = features.to("cpu")
+        #features = features.tolist()
+        labels = labels.to("cpu")
+        labels = labels.tolist()
+        ''' 
+        for x in features:
             holdout_features.append(x)
-        for x in label:
+        '''
+        for x in labels:
             holdout_labels.append(x)
-        i += 1
-    print("===holdout feature===")
-    print(holdout_features)
-    print(len(holdout_features))
-    print(holdout_labels)
-    print(len(holdout_labels)) 
+    
+    #torch.save(holdout_features, feature_path+"holdout_features.pt")
+    print("loading holdout_features...")
+    holdout_features = torch.load(feature_path+"holdout_features.pt")
+    
+    # calculate cosine similarity
+    print("calculate cosine similarity")
+    predict_list = []
+    for i in tqdm(range(len(holdout_features))):
+        cos_list = []
+        for j in range(len(ref_features)):
+            a = holdout_features[i]
+            a = torch.Tensor(a)
+            a = a.to("cuda")
+            b = ref_features[j]
+            b = torch.Tensor(b)
+            b = b.to("cuda")
+            #print("a shape:", a.shape)
+            #print("b shape:", b.shape)
+            cos = F.cosine_similarity(a, b, dim=0)
+            tup = ref_labels[j], cos
+            cos_list.append(tup)
+        sorted_cos_list = sorted(cos_list, key=lambda x: x[1], reverse=True)
+        predict_list.append(sorted_cos_list[0][0])
+    torch.save(predict_list, "predict_list.pt")
+    print("====predict_list====")
+    print("len:", len(predict_list))
+    print(predict_list)
 
-
-
-
-
-
+    
 
 
 
