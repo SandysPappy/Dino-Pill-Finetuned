@@ -41,7 +41,7 @@ if __name__=="__main__":
                         default=100,
                         help='Number of epochs to run trainer.')
     parser.add_argument('--batch_size',
-                        type=int, default=4,
+                        type=int, default=24,
                         help='Batch size. Must divide evenly into the dataset sizes.')
     parser.add_argument('--log_dir',
                         type=str,
@@ -139,11 +139,13 @@ if __name__=="__main__":
         labels = labels.tolist()
         
         for x in features:
+            x = torch.Tensor(x)
+            x = F.normalize(x, dim=0)
             ref_features.append(x)
         
         for x in labels:
             ref_labels.append(x)
-    
+     
     torch.save(ref_features, feature_path+"ref_features_backbone.pt")
     #print("loading ref_features...")
     #ref_features = torch.load(feature_path+"ref_features.pt")    
@@ -163,6 +165,8 @@ if __name__=="__main__":
         labels = labels.tolist()
          
         for x in features:
+            x = torch.Tensor(x)
+            x = F.normalize(x, dim=0)
             holdout_features.append(x)
         
         for x in labels:
@@ -181,10 +185,8 @@ if __name__=="__main__":
         max_label=-1
         for j in range(len(ref_features)):
             a = holdout_features[i]
-            a = torch.Tensor(a)
             a = a.to("cuda")
             b = ref_features[j]
-            b = torch.Tensor(b)
             b = b.to("cuda")
             #print("a shape:", a.shape)
             #print("b shape:", b.shape)
