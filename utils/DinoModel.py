@@ -9,7 +9,7 @@ from torchvision import transforms as pth_transforms
 
 
 class dino_args:
-    arch = "vit_small"
+    arch = "vit_base"
     patch_size = 8
     n_last_blocks = 4
     avgpool_patchtokens = False
