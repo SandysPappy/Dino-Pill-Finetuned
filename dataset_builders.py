@@ -10,7 +10,7 @@ from imgaug import augmenters as iaa
 from PIL import Image
 
 # set use_epill_transforms=True to transform input image when calling __get__
-def get_epill_dataset(fold=None, use_epill_transforms=None):
+def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=True):
     if fold == None:
         raise KeyError("Please insert which fold to use")
 
@@ -35,16 +35,17 @@ def get_epill_dataset(fold=None, use_epill_transforms=None):
 # ['images', 'pilltype_id',            'label_code_id', 'prod_code_id', 'is_ref', 'is_front', 'is_new', 'image_path',                  'label']
 # ['0.jpg',  '51285-0092-87_BE305F72', '51285',         '92',           'False',  'False',    'False',  'fcn_mix_weight/dc_224/0.jpg', '51285-0092-87_BE305F72']
 class EPillDataset(Dataset):
-    def __init__(self, path_labels, use_epill_transforms=None):
+    def __init__(self, path_labels, use_epill_transforms=None, use_dinov1_norm=True):
 
         # image will be transformed when called in __getitem__ if use_epill_transforms is set
         # rotates, scales, translates, and (sometimes) shears image
         self.use_epill_transforms = use_epill_transforms
+        self.use_dinov1_norm = use_dinov1_norm
 
         self.label_index_keys = None
         self.labels = []
         self.images = []
-        self.dinov1_transform = T.Compose([
+        self.dinov1_norm = T.Compose([
             #T.Resize((224,224)),
             #T.ToTensor(),
             T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -88,11 +89,11 @@ class EPillDataset(Dataset):
         label = self.labels[idx][1] # pilltype_id 
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
-        #if self.use_epill_transforms:
-        img = EPillDataset.epill_transforms(img)
-        #img = img.permute(1, 2, 0)
-        #print("img shape:", img.shape)
-        img = self.dinov1_transform(img)
+        if self.use_epill_transforms:
+            img = EPillDataset.epill_transforms(img)
+
+        if self.use_dinov1_norm:
+            img = self.dinov1_norm(img)
         ret = {
             "image": img,
             "label": label,
@@ -107,8 +108,6 @@ class EPillDataset(Dataset):
     @staticmethod
     def epill_transforms(image):
         image = np.array(image)
-        #print("=======")
-        #print("image shape:", image.shape)
         affine_seq, ref_seq, cons_seq = EPillDataset.get_imgaug_sequences()
         
         aug_image = affine_seq.augment_images(image)
