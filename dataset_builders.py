@@ -5,7 +5,9 @@ from sklearn.preprocessing import LabelEncoder
 import torch
 from torch.utils.data import Dataset
 from torchvision.io import read_image
+import torchvision.transforms as T
 from imgaug import augmenters as iaa
+from PIL import Image
 
 # set use_epill_transforms=True to transform input image when calling __get__
 def get_epill_dataset(fold=None, use_epill_transforms=None):
@@ -42,7 +44,11 @@ class EPillDataset(Dataset):
         self.label_index_keys = None
         self.labels = []
         self.images = []
-
+        self.dinov1_transform = T.Compose([
+            #T.Resize((224,224)),
+            #T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
         # set labels and index keys
         with open(path_labels, 'r') as f:
             csv_reader = csv.reader(f)
@@ -70,6 +76,7 @@ class EPillDataset(Dataset):
         for label in self.labels:
             imgs_path = 'datasets/ePillID_data/classification_data/'
             img = read_image(imgs_path+label[7])
+            #img = Image.open(imgs_path+label[7])
             self.images.append(img)
 
     def __len__(self):
@@ -81,9 +88,11 @@ class EPillDataset(Dataset):
         label = self.labels[idx][1] # pilltype_id 
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
-        if self.use_epill_transforms:
-            img = EPillDataset.epill_transforms(img)
-
+        #if self.use_epill_transforms:
+        img = EPillDataset.epill_transforms(img)
+        #img = img.permute(1, 2, 0)
+        #print("img shape:", img.shape)
+        img = self.dinov1_transform(img)
         ret = {
             "image": img,
             "label": label,
@@ -98,12 +107,14 @@ class EPillDataset(Dataset):
     @staticmethod
     def epill_transforms(image):
         image = np.array(image)
+        #print("=======")
+        #print("image shape:", image.shape)
         affine_seq, ref_seq, cons_seq = EPillDataset.get_imgaug_sequences()
         
         aug_image = affine_seq.augment_images(image)
         aug_image = ref_seq.augment_images(image)
         aug_image = cons_seq.augment_images(image)
-
+        
         return torch.Tensor(aug_image)
 
     # image transformations used in the paper

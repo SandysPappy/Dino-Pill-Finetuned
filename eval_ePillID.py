@@ -18,7 +18,7 @@ from tqdm import tqdm
 from numpy import dot
 from numpy.linalg import norm
 import torch.nn.functional as F
-
+from utils import metrics
 
 def initDinoV1Model(model_to_load, FLAGS, checkpoint_key="teacher", use_back_bone_only=False):
     dino_args.pretrained_weights = model_to_load
@@ -53,7 +53,7 @@ if __name__=="__main__":
                         help='type of mode train or test')
     parser.add_argument('--dino_base_model_weights',
                         type=str,
-                        default="./dino/pretrained/dino_deitsmall8_pretrain_full_checkpoint.pth",
+                        default="./dino/pretrained/dino_vitbase8_pretrain_full_checkpoint.pth",
                         help='dino based model weights')
     parser.add_argument('--dino_custom_model_weights',
                         type=str,
@@ -95,7 +95,7 @@ if __name__=="__main__":
     SEED_FOR_RANDOM_SPLIT = 43
 
 
-    dinov1_model = initDinoV1Model(model_to_load=FLAGS.dino_base_model_weights,FLAGS=FLAGS,checkpoint_key="teacher", use_back_bone_only=False)
+    dinov1_model = initDinoV1Model(model_to_load=FLAGS.dino_base_model_weights,FLAGS=FLAGS,checkpoint_key="teacher", use_back_bone_only=True)
 
     '''
     data_path = "./data/ePillID_data/classification_data/segmented_nih_pills_224/"
@@ -117,7 +117,7 @@ if __name__=="__main__":
 
     print("result:", pred)
     '''
-
+    
     ref_data = get_epill_dataloader('refs', FLAGS.batch_size, True)
     holdout_data = get_epill_dataloader('holdout', FLAGS.batch_size, True)
 
@@ -129,22 +129,24 @@ if __name__=="__main__":
     
     for batch in tqdm(ref_data):
         images = batch['image']
+        #print("image shape:", images.shape)
         labels = batch['label']
         images = images.to("cuda")
-        #features = dinov1_model(images).clone()
-        #features = features.to("cpu")
-        #features = features.tolist()
+        features = dinov1_model(images)
+        features = features.to("cpu")
+        features = features.tolist()
         labels = labels.to("cpu")
         labels = labels.tolist()
-        '''
+        
         for x in features:
             ref_features.append(x)
-        '''
+        
         for x in labels:
             ref_labels.append(x)
-    #torch.save(ref_features, feature_path+"ref_features.pt")
-    print("loading ref_features...")
-    ref_features = torch.load(feature_path+"ref_features.pt")    
+    
+    torch.save(ref_features, feature_path+"ref_features_backbone.pt")
+    #print("loading ref_features...")
+    #ref_features = torch.load(feature_path+"ref_features.pt")    
     
     holdout_features = []
     holdout_labels = []
@@ -154,27 +156,29 @@ if __name__=="__main__":
         images = batch['image']
         labels = batch['label']
         images = images.to("cuda")
-        #features = dinov1_model(images).clone()
-        #features = features.to("cpu")
-        #features = features.tolist()
+        features = dinov1_model(images)
+        features = features.to("cpu")
+        features = features.tolist()
         labels = labels.to("cpu")
         labels = labels.tolist()
-        ''' 
+         
         for x in features:
             holdout_features.append(x)
-        '''
+        
         for x in labels:
             holdout_labels.append(x)
     
-    #torch.save(holdout_features, feature_path+"holdout_features.pt")
-    print("loading holdout_features...")
-    holdout_features = torch.load(feature_path+"holdout_features.pt")
-    
+    torch.save(holdout_features, feature_path+"holdout_features_backbone.pt")
+    #print("loading holdout_features...")
+    #holdout_features = torch.load(feature_path+"holdout_features.pt")
     # calculate cosine similarity
+    
     print("calculate cosine similarity")
     predict_list = []
+    
     for i in tqdm(range(len(holdout_features))):
-        cos_list = []
+        max_cos=0
+        max_label=-1
         for j in range(len(ref_features)):
             a = holdout_features[i]
             a = torch.Tensor(a)
@@ -185,18 +189,35 @@ if __name__=="__main__":
             #print("a shape:", a.shape)
             #print("b shape:", b.shape)
             cos = F.cosine_similarity(a, b, dim=0)
-            tup = ref_labels[j], cos
-            cos_list.append(tup)
-        sorted_cos_list = sorted(cos_list, key=lambda x: x[1], reverse=True)
-        predict_list.append(sorted_cos_list[0][0])
-    torch.save(predict_list, "predict_list.pt")
+            if cos > max_cos:
+                max_cos = cos
+                max_label = ref_labels[j]
+            #tup = ref_labels[j], cos
+            #cos_list.append(tup)
+        #sorted_cos_list = sorted(cos_list, key=lambda x: x[1], reverse=True)
+        predict_list.append(max_label)
+    torch.save(predict_list, "predict_list_backbone_only.pt")
     print("====predict_list====")
     print("len:", len(predict_list))
     print(predict_list)
-
     
-
-
+    #predict_list = torch.load("predict_list_backbone_only.pt")
+    c = 0
+    for i in range(len(holdout_labels)):
+        if holdout_labels[i] == predict_list[i]:
+            print("match")
+            c+=1
+    print("c:", c)
+    a_list =[]
+    p_list =[]
+    for i in holdout_labels:
+        a_list.append([i])
+    for i in predict_list:
+        p_list.append([i])
+    Map_result = metrics.mapk(a_list, p_list)
+    print("MAP score:", Map_result)
+    
+    
 
 
     
