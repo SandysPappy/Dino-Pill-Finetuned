@@ -6,8 +6,10 @@ import torch
 from torch.utils.data import Dataset
 from torchvision.io import read_image
 import torchvision.transforms as T
+from torchvision.transforms import functional as F
 from imgaug import augmenters as iaa
 from PIL import Image
+import matplotlib.pyplot as plt
 
 # set use_epill_transforms=True to transform input image when calling __get__
 def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None):
@@ -125,14 +127,21 @@ class EPillDataset(Dataset):
     # transforms images according to the epill dataset paper
     @staticmethod
     def epill_transforms(image):
+        raise NotImplementedError("Turn off epill transforms. Dont use this transform method yet. It requires more debugging.")
+        print('=====================')
+        print(image.shape)
+        image = image.permute(1, 2, 0)
+        print(image.shape)
         image = np.array(image)
         affine_seq, ref_seq, cons_seq = EPillDataset.get_imgaug_sequences()
         
-        aug_image = affine_seq.augment_images(image)
+        aug_image = affine_seq.augment_images([image])
         aug_image = ref_seq.augment_images(image)
         aug_image = cons_seq.augment_images(image)
         
-        return torch.Tensor(aug_image)
+        ret = torch.Tensor(aug_image).permute(2, 0, 1)
+        print('=====================')
+        return ret
 
     # image transformations used in the paper
     # this is just copy and pasted from here: https://github.com/usuyama/ePillID-benchmark/blob/master/src/image_augmentators.py
@@ -214,23 +223,37 @@ class EPillDatasetDinov1(EPillDataset):
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
 
-        img = EPillDataset.epill_transforms(img)
+        #img = EPillDataset.epill_transforms(img)
 
         img = self.dinov1_norm(img)
 
         return img, idx
-
-
  
 if __name__ == '__main__':
     path_labels = 'datasets/ePillID_data/all_labels.csv'
+    # img_path = 'datasets/ePillID_data/classification_data/segmented_nih_pills_224/54868-6176_0_0.jpg'
 
-    dataset_refs = get_epill_dataset('refs', use_epill_transforms=True)
+    # image = Image.open(img_path)
+    # image.show()
+    # image = F.pil_to_tensor(image)
+    #print(image.shape)
+
+    # aug_image = EPillDataset.epill_transforms(image)
+
+    #print("numpy shape: ", aug_image.shape)
+    # aug_image = torch.Tensor(aug_image).permute(2, 0, 1)
+    #print("torch shape: ",aug_image.shape)
+    #print(type(aug_image))
+    #print(len(aug_image))
+    #print(aug_image.shape)
+    # aug_image = F.to_pil_image(aug_image)
+    # aug_image.show()
+    dataset_refs = get_epill_dataset('refs')
     dataset_fold_0 = get_epill_dataset('fold_0')
-    dataset_fold_1 = get_epill_dataset('fold_1', True)
-    dataset_fold_2 = get_epill_dataset('fold_2', True)
-    dataset_fold_3 = get_epill_dataset('fold_3', True)
-    dataset_holdout = get_epill_dataset('holdout', True)
+    dataset_fold_1 = get_epill_dataset('fold_1')
+    dataset_fold_2 = get_epill_dataset('fold_2')
+    dataset_fold_3 = get_epill_dataset('fold_3')
+    dataset_holdout = get_epill_dataset('holdout')
 
     datasets = [
         dataset_refs,
@@ -240,6 +263,8 @@ if __name__ == '__main__':
         dataset_fold_3,
         dataset_holdout
     ]
+
+    print('datasets built')
 
     # for dataset in datasets:
     #     # checking if all only contains reference images
