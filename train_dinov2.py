@@ -157,8 +157,12 @@ if __name__=="__main__":
         labels = batch['label']
         images = images.to("cuda")
         features = dinov2_model(images)
-
+        print(images.shape)
+        print(labels.shape)
+        print(features.shape)
         break 
+
+
         for x in features:
             x = torch.Tensor(x)
             x = F.normalize(x, dim=0)
