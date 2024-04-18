@@ -10,7 +10,7 @@ from imgaug import augmenters as iaa
 from PIL import Image
 
 # set use_epill_transforms=True to transform input image when calling __get__
-def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True):
+def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True, crop_transforms=None):
     if fold == None:
         raise KeyError("Please insert which fold to use")
 
@@ -18,29 +18,30 @@ def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True
 
     # note: pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv is the same file as all_labels.csv
     if fold == 'refs':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv', use_epill_transforms)
+        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
 
     if fold == 'holdout':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_4.csv', use_epill_transforms)
+        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_4.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
     if fold == 'fold_0':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_0.csv', use_epill_transforms)
+        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_0.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
     if fold == 'fold_1':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_1.csv', use_epill_transforms)
+        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_1.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
     if fold == 'fold_2':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_2.csv', use_epill_transforms)
+        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_2.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
     if fold == 'fold_3':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_3.csv', use_epill_transforms)
+        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_3.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
 
 # annotations format
 # ['images', 'pilltype_id',            'label_code_id', 'prod_code_id', 'is_ref', 'is_front', 'is_new', 'image_path',                  'label']
 # ['0.jpg',  '51285-0092-87_BE305F72', '51285',         '92',           'False',  'False',    'False',  'fcn_mix_weight/dc_224/0.jpg', '51285-0092-87_BE305F72']
 class EPillDataset(Dataset):
-    def __init__(self, path_labels, use_epill_transforms=None, use_dinov1_norm=True):
+    def __init__(self, path_labels, use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None):
 
         # image will be transformed when called in __getitem__ if use_epill_transforms is set
         # rotates, scales, translates, and (sometimes) shears image
         self.use_epill_transforms = use_epill_transforms
         self.use_dinov1_norm = use_dinov1_norm
+        self.crop_transforms = crop_transforms
 
         self.label_index_keys = None
         self.labels = []
@@ -89,20 +90,36 @@ class EPillDataset(Dataset):
         label = self.labels[idx][1] # pilltype_id 
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
+
+        if self.use_epill_transforms is not None and self.crop_transforms is not None:
+            raise KeyError('Using more than one transform. Please only set one type of transform when creating the dataset')
+
         if self.use_epill_transforms:
             img = EPillDataset.epill_transforms(img)
 
+        # used for training 
+        if self.crop_transforms:
+            # first 2 crops are global. The rest are local crops
+            img , crops = self.crop_transforms(img)
+            return {
+                "image": img,
+                "global_crops": crops[:2],
+                "local_crops": crops[2:],
+                "label": label,
+                "is_front": is_front,
+                "is_ref": is_ref
+            }
+
         if self.use_dinov1_norm:
             img = self.dinov1_norm(img)
-        ret = {
+
+        return {
             "image": img,
             "label": label,
             "is_front": is_front,
             "is_ref": is_ref
         }
         
-        return ret
-
 
     # transforms images according to the epill dataset paper
     @staticmethod
