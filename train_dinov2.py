@@ -1,110 +1,224 @@
-import argparse
-import glob
-import os
-import pickle
-import random
-import sys
-
-import matplotlib.pyplot as plt
-import numpy as np
+from utils import utils
+from utils.DinoModel import DinoModel, dino_args
+from utils.utils import NpEncoder
 import torch
-from PIL import Image
-from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader
-
-sys.path.append("./../dino")
-sys.path.append("./../src")
-
-from dinov2.dino import utils
-
-from dinov2.src.constants import COLORS
-from dinov2.src.plotting.vis_tools import visualize_attention
-
+import argparse
+import time 
+import faiss
+import numpy as np
+import json
+import os
+import torchvision
+import torchvision.transforms as T
+import torch.distributed as dist
+from torchvision.io import read_image
+from PIL import Image 
 from dataset_loaders import get_epill_dataloader
+from tqdm import tqdm
+from numpy import dot
+from numpy.linalg import norm
+import torch.nn.functional as F
+from utils import metrics
 
-def seed_everything(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    
-    
-class DataAugmentationDINO(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, image_size=224):
-        flip_and_color_jitter = transforms.Compose([
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomApply(
-                [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)],
-                p=0.8
-            ),
-            transforms.RandomGrayscale(p=0.2),
+if __name__=="__main__":
+    parser = argparse.ArgumentParser('DinoV2 args')
+    parser.add_argument('--learning_rate',
+                        type=float, default=0.01,
+                        help='Initial learning rate.')
+    parser.add_argument('--num_epochs',
+                        type=int,
+                        default=100,
+                        help='Number of epochs to run trainer.')
+    parser.add_argument('--batch_size',
+                        type=int, default=32,
+                        help='Batch size. Must divide evenly into the dataset sizes.')
+    parser.add_argument('--log_dir',
+                        type=str,
+                        default='DINO',
+                        help='Directory to put logging.')
+    parser.add_argument('--mode',
+                        type=str,
+                        default="train",
+                        help='type of mode train or test')
+    parser.add_argument('--dino_base_model_weights',
+                        type=str,
+                        default="./dino/pretrained/dino_vitbase8_pretrain_full_checkpoint.pth",
+                        help='dino based model weights')
+    parser.add_argument('--dino_custom_model_weights',
+                        type=str,
+                        default="./weights/dinoxray/checkpoint.pth",
+                        help='dino based model weights')
+    parser.add_argument('--search_gallery',
+                        type=str,
+                        default="train",
+                        help='dataset in which images will be searched')
+    parser.add_argument('--topK',
+                        type=int,
+                        default=5,
+                        help='Top-k paramter, defaults to 5')
+    parser.add_argument('--seed', 
+                        default=0, 
+                        type=int, 
+                        help='Random seed.')
+    parser.add_argument('--num_workers', 
+                        default=4, 
+                        type=int, 
+                        help='Number of data loading workers per GPU.')
+    parser.add_argument("--dist_url", 
+                        default="env://", 
+                        type=str, 
+                        help="""url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html""")
+    parser.add_argument("--local_rank", 
+                        default=0, 
+                        type=int, 
+                        help="Please ignore and do not set this argument.")
+
+
+    FLAGS = None
+    FLAGS, unparsed = parser.parse_known_args()
+    print(FLAGS)
+
+    utils.init_distributed_mode(args=FLAGS)
+
+    TEST_SPLIT_FOR_ZERO_SHOT_RETRIEVAL = 0.7
+    SEED_FOR_RANDOM_SPLIT = 43
+
+
+    # vits14 vitb14 vitl14 vitg14
+    backbone_arch = "vitb14"
+    backbone_name = f"dinov2_{backbone_arch}"
+
+    dinov2_model = torch.hub.load(repo_or_dir="facebookresearch/dinov2", model=backbone_name)
+    dinov2_model.eval()
+    dinov2_model.cuda()
+    '''
+    data_path = "./data/ePillID_data/classification_data/segmented_nih_pills_224/"
+    dinov1_transform = T.Compose([    
+            T.Resize((224,224)),
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         ])
+
+    batch = torch.zeros([FLAGS.batch_size,3,224,224])
+    for i in range(FLAGS.batch_size):
+        img = Image.open(f"{data_path}42291-81{i}_0_0.jpg")
+        #img = read_image(f"{data_path}42291-81{i}_0_0.jpg")
+        img = dinov1_transform(img)
+        batch[i] = img 
+    print("shape:", batch.shape)
+    batch = batch.to("cuda")
+    pred = dinov1_model(batch)
+
+    print("result:", pred)
+    '''
+    
+    ref_data = get_epill_dataloader('refs', FLAGS.batch_size)
+    holdout_data = get_epill_dataloader('holdout', FLAGS.batch_size)
+
+    # extract feature
+    print("start extracting feature")
+    feature_path = "features/"
+    ref_features = []
+    ref_labels = []
+    
+    for batch in tqdm(ref_data):
+        images = batch['image']
+        #print("image shape:", images.shape)
+        labels = batch['label']
+        images = images.to("cuda")
+        features = dinov2_model(images)
+        features = features.to("cpu")
+        features = features.tolist()
+        labels = labels.to("cpu")
+        labels = labels.tolist()
         
-        normalize = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-        ])
-        # first global crop
-        self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(image_size, scale=global_crops_scale, interpolation=Image.BICUBIC),
-            flip_and_color_jitter,
-            utils.GaussianBlur(1.0),
-            normalize,
-        ])
-        # second global crop
-        self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(image_size, scale=global_crops_scale, interpolation=Image.BICUBIC),
-            flip_and_color_jitter,
-            utils.GaussianBlur(0.1),
-            utils.Solarization(0.2),
-            normalize,
-        ])
-        # transformation for the local small crops
-        self.local_crops_number = local_crops_number
-        self.local_transfo = transforms.Compose([
-            transforms.RandomResizedCrop(int(96/(244/image_size)), scale=local_crops_scale, interpolation=Image.BICUBIC),
-            flip_and_color_jitter,
-            utils.GaussianBlur(p=0.5),
-            normalize,
-        ])
-
-    def __call__(self, image):
-        to_pil = transforms.ToPILImage()
-        image = to_pil(image)
-        crops = []
-        crops.append(self.global_transfo1(image))
-        crops.append(self.global_transfo2(image))
-        for _ in range(self.local_crops_number):
-            crops.append(self.local_transfo(image))
-        return transforms.ToTensor()(image), crops
-
-# Call the above function to seed everything
-seed_everything()
-local_crops_number = 9
-batch_size = 32
-
-crop_transform = DataAugmentationDINO(
-    global_crops_scale=(0.4, 1.0), 
-    local_crops_scale=(0.05, 0.4), 
-    local_crops_number=local_crops_number
-)
-
-refs_loader = get_epill_dataloader('refs', batch_size=6, crop_transforms=crop_transform)
-
-for i, data in enumerate(refs_loader):
-    image = data['image']
-    global_crops = data['global_crops']
-    local_crops = data['local_crops']
-
-    print(image.shape)
+        for x in features:
+            x = torch.Tensor(x)
+            x = F.normalize(x, dim=0)
+            ref_features.append(x)
+        
+        for x in labels:
+            ref_labels.append(x)
     
-    print(f'{len(global_crops)} global crops')
-    for crop in global_crops:
-        print(crop.shape)
+    torch.save(ref_features, feature_path+"ref_features_backbone_v2.pt")
+    #print("loading ref_features...")
+    #ref_features = torch.load(feature_path+"ref_features.pt")    
+    
+    holdout_features = []
+    holdout_labels = []
+ 
+    for batch in tqdm(holdout_data):
+        
+        images = batch['image']
+        labels = batch['label']
+        images = images.to("cuda")
+        features = dinov2_model(images)
+        features = features.to("cpu")
+        features = features.tolist()
+        labels = labels.to("cpu")
+        labels = labels.tolist()
+         
+        for x in features:
+            x = torch.Tensor(x)
+            x = F.normalize(x, dim=0)
+            holdout_features.append(x)
+        
+        for x in labels:
+            holdout_labels.append(x)
+    
+    torch.save(holdout_features, feature_path+"holdout_features_backbone_v2.pt")
+    #print("loading holdout_features...")
+    #holdout_features = torch.load(feature_path+"holdout_features.pt")
+    # calculate cosine similarity
+    
+    print("calculate cosine similarity")
+    predict_list = []
+    
+    for i in tqdm(range(len(holdout_features))):
+        max_cos=0
+        max_label=-1
+        for j in range(len(ref_features)):
+            a = holdout_features[i]
+            a = a.to("cuda")
+            b = ref_features[j]
+            b = b.to("cuda")
+            #print("a shape:", a.shape)
+            #print("b shape:", b.shape)
+            cos = F.cosine_similarity(a, b, dim=0)
+            if cos > max_cos:
+                max_cos = cos
+                max_label = ref_labels[j]
+            #tup = ref_labels[j], cos
+            #cos_list.append(tup)
+        #sorted_cos_list = sorted(cos_list, key=lambda x: x[1], reverse=True)
+        predict_list.append(max_label)
+    torch.save(predict_list, "predict_list_backbone_only_v2.pt")
+    print("====predict_list====")
+    print("len:", len(predict_list))
+    print(predict_list)
+    
+    #predict_list = torch.load("predict_list_backbone_only.pt")
+    c = 0
+    for i in range(len(holdout_labels)):
+        if holdout_labels[i] == predict_list[i]:
+            print("match")
+            c+=1
+    print("c:", c)
+    a_list =[]
+    p_list =[]
+    for i in holdout_labels:
+        a_list.append([i])
+    for i in predict_list:
+        p_list.append([i])
+    Map_result = metrics.mapk(a_list, p_list)
+    print("MAP score:", Map_result)
+    
+    
 
-    print(f'{len(local_crops)} local crops')
-    for crop in local_crops:
-        print(crop.shape)
 
-    break
+    
+
+
+
+
+
