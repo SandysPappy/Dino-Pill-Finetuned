@@ -10,7 +10,7 @@ from imgaug import augmenters as iaa
 from PIL import Image
 
 # set use_epill_transforms=True to transform input image when calling __get__
-def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True, crop_transforms=None):
+def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None):
     if fold == None:
         raise KeyError("Please insert which fold to use")
 
@@ -36,7 +36,7 @@ def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True
 # ['images', 'pilltype_id',            'label_code_id', 'prod_code_id', 'is_ref', 'is_front', 'is_new', 'image_path',                  'label']
 # ['0.jpg',  '51285-0092-87_BE305F72', '51285',         '92',           'False',  'False',    'False',  'fcn_mix_weight/dc_224/0.jpg', '51285-0092-87_BE305F72']
 class EPillDataset(Dataset):
-    def __init__(self, path_labels, use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None):
+    def __init__(self, path_labels, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None):
 
         # image will be transformed when called in __getitem__ if use_epill_transforms is set
         # rotates, scales, translates, and (sometimes) shears image
