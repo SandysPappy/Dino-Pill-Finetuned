@@ -31,6 +31,14 @@ def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True
     if fold == 'fold_3':
         return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_3.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
 
+class EPillDatasetDinov1(EPillDataset):
+    def __init__(self, **kwargs):
+        super.__init__(**kwargs)
+
+    def __getitem__(self, idx):
+        pass
+
+
 # annotations format
 # ['images', 'pilltype_id',            'label_code_id', 'prod_code_id', 'is_ref', 'is_front', 'is_new', 'image_path',                  'label']
 # ['0.jpg',  '51285-0092-87_BE305F72', '51285',         '92',           'False',  'False',    'False',  'fcn_mix_weight/dc_224/0.jpg', '51285-0092-87_BE305F72']
@@ -91,7 +99,7 @@ class EPillDataset(Dataset):
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
 
-        if self.use_epill_transforms is not None and self.crop_transforms is not None:
+        if self.use_dinov1_norm is not None and self.crop_transforms is not None:
             raise KeyError('Using more than one transform. Please only set one type of transform when creating the dataset')
 
         if self.use_epill_transforms:
