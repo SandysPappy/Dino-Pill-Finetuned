@@ -114,6 +114,7 @@ class EPillDataset(Dataset):
             }
 
         if self.use_dinov1_norm:
+            img = img.float()
             img = self.dinov1_norm(img)
 
         return {
