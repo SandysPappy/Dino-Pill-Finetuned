@@ -31,13 +31,6 @@ def get_epill_dataset(fold=None, use_epill_transforms=True, use_dinov1_norm=True
     if fold == 'fold_3':
         return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_3.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
 
-class EPillDatasetDinov1(EPillDataset):
-    def __init__(self, **kwargs):
-        super.__init__(**kwargs)
-
-    def __getitem__(self, idx):
-        pass
-
 
 # annotations format
 # ['images', 'pilltype_id',            'label_code_id', 'prod_code_id', 'is_ref', 'is_front', 'is_new', 'image_path',                  'label']
@@ -210,6 +203,24 @@ class EPillDataset(Dataset):
         ])
         
         return affine_seq, ref_seq, cons_seq
+
+class EPillDatasetDinov1(EPillDataset):
+    def __init__(self, **kwargs):
+        super.__init__(**kwargs)
+
+    def __getitem__(self, idx):
+        img = self.images[idx]
+        label = self.labels[idx][1] # pilltype_id
+        is_front = self.labels[idx][5]
+        is_ref = self.labels[idx][4]
+
+        img = EPillDataset.epill_transforms(img)
+
+        img = self.dinov1_norm(img)
+
+        return img, idx
+
+
  
 if __name__ == '__main__':
     path_labels = 'datasets/ePillID_data/all_labels.csv'
