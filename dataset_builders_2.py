@@ -13,38 +13,61 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedShuffleSplit
 import time
-from utils import utils
+from myutils import utils
 import torch.distributed as dist
 from torchvision.transforms import ToTensor
+from easy_ocr import easyocr_prediction
+from tqdm import tqdm
 
 # set use_epill_transforms=True to transform input image when calling __get__
-def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None):
+def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None, do_ocr=False):
     if fold == None:
         raise KeyError("Please insert which fold to use")
 
     path_folds = 'datasets/ePillID_data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/'
 
+    fold_list = ["all", "4", "0", "1", "2", "3"] # ref, holdout, fold_0, fold_1, fold_2, fold_3
+    folds = []
+    for i in range(len(fold_list)):
+        folds.append( EPillDataset(f'{path_folds}pilltypeid_nih_sidelbls0.01_metric_5folds_{fold_list[i]}.csv', use_epill_transforms=use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms, do_ocr=do_ocr) )
+    #print("len folds:", len(folds))
+    all_labels = []
+    for i in folds:
+        for j in range(len(i.labels)):
+            all_labels.append(i.labels[j][1])
+    
+    le = LabelEncoder()
+    le.fit(all_labels)
+    encode_labels = list(le.transform(all_labels))
+
+    start = 0
+    for i in folds:
+        f_len = len(i.labels)
+        end = start+f_len
+        i.ids = encode_labels[start:end]
+        start = end
+        #print("f_len:", f_len)
+        #print("ids len:", len(i.ids))
+
     # note: pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv is the same file as all_labels.csv
     if fold == 'refs':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
-
+        return folds[0]
     if fold == 'holdout':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_4.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
+        return folds[1]
     if fold == 'fold_0':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_0.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
+        return folds[2]
     if fold == 'fold_1':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_1.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
+        return folds[3]
     if fold == 'fold_2':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_2.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
+        return folds[4]
     if fold == 'fold_3':
-        return EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_3.csv', use_epill_transforms, use_dinov1_norm=use_dinov1_norm, crop_transforms=crop_transforms)
-
+        return folds[5]
 
 # annotations format
 # ['images', 'pilltype_id',            'label_code_id', 'prod_code_id', 'is_ref', 'is_front', 'is_new', 'image_path',                  'label']
 # ['0.jpg',  '51285-0092-87_BE305F72', '51285',         '92',           'False',  'False',    'False',  'fcn_mix_weight/dc_224/0.jpg', '51285-0092-87_BE305F72']
 class EPillDataset(Dataset):
-    def __init__(self, path_labels, img_preprocessing_fn, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None):
+    def __init__(self, path_labels, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None, do_ocr=False):
 
         # image will be transformed when called in __getitem__ if use_epill_transforms is set
         # rotates, scales, translates, and (sometimes) shears image
@@ -52,11 +75,13 @@ class EPillDataset(Dataset):
         self.use_dinov1_norm = use_dinov1_norm
         self.crop_transforms = crop_transforms
 
-        self.img_preprocessing_fn = img_preprocessing_fn
+        #self.img_preprocessing_fn = img_preprocessing_fn
         self.label_index_keys = None
         self.labels = []
         self.images = []
+        self.ids = []
         self.image_features= []
+        self.ocr_res = []
         self.class_id_to_str = {}
         self.class_str_to_id = {}
         self.dinov1_norm = T.Compose([
@@ -65,6 +90,7 @@ class EPillDataset(Dataset):
             T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         ])
         # set labels and index keys
+        all_path = 'datasets/ePillID_data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv'
         with open(path_labels, 'r') as f:
             csv_reader = csv.reader(f)
 
@@ -75,26 +101,35 @@ class EPillDataset(Dataset):
                         label[i] = True
                     if label[i] == 'False':
                         label[i] = False
+                if path_labels==all_path and label[4]==False:
+                    continue
                 self.labels.append(label)
 
         # encode the gross strings into integers (0, numclasses-1)
-        ids = []
+        '''
         for label in self.labels:
-            ids.append(label[1]) # pilltype_id
+            self.ids.append(label[1]) # pilltype_id
         le = LabelEncoder()
-        le.fit(ids)
-        ids = list(le.transform(ids))
-        for i, id in enumerate(ids):
+        le.fit(self.ids)
+        self.ids = list(le.transform(self.ids))
+        '''
+        '''
+        for i, id in enumerate(self.ids):
             if id not in self.class_id_to_str:
                 self.class_id_to_str[id] = self.labels[i][1]
             if self.labels[i][1] not in self.class_str_to_id:
                 self.class_str_to_id[self.labels[i][1]] = id
             self.labels[i][1] = id
-
+        '''
         # set images as list of torch tensors 
-        for label in self.labels:
+        print("read image and run ocr")
+        for label in tqdm(self.labels):
             imgs_path = 'datasets/ePillID_data/classification_data/'
             img = read_image(imgs_path+label[7])
+            if path_labels == "datasets/ePillID_data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/pilltypeid_nih_sidelbls0.01_metric_5folds_4.csv" and do_ocr==True:
+                text = easyocr_prediction(imgs_path+label[7])
+                self.ocr_res.append(text)
+            #print(text)
             #img = Image.open(imgs_path+label[7]).convert('RGB')
             self.images.append(img)
 
@@ -109,7 +144,7 @@ class EPillDataset(Dataset):
         metric_logger = utils.MetricLogger(delimiter="  ")
         features = None
         # for samples, index in metric_logger.log_every(data_loader, 10):
-        for Image_features,labels,image, index in metric_logger.log_every(data_loader, 10):
+        for Image_features,labels,image, is_front, index in metric_logger.log_every(data_loader, 10):
             samples = image
             samples = samples.cuda(non_blocking=True)
             index = index.cuda(non_blocking=True)
@@ -163,8 +198,10 @@ class EPillDataset(Dataset):
     def __getitem__(self, idx):
         img = self.images[idx]
         label = self.labels[idx][1] # pilltype_id
+        en_label = self.ids[idx]
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
+        img_path = self.labels[idx][7]
         Image_features = []
 
         #img = EPillDataset.epill_transforms(img)
@@ -175,7 +212,7 @@ class EPillDataset(Dataset):
         if len(self.image_features)==len(self):
             Image_features = self.image_features[idx]
         
-        return Image_features, label, img, idx
+        return Image_features, en_label, img, is_front, idx 
 
     def old__getitem__(self, idx):
         img = self.images[idx]
