@@ -8,6 +8,14 @@ from torchvision.io import read_image
 import torchvision.transforms as T
 from imgaug import augmenters as iaa
 from PIL import Image
+from tqdm import tqdm
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedShuffleSplit
+import time
+from utils import utils
+import torch.distributed as dist
+from torchvision.transforms import ToTensor
 
 # set use_epill_transforms=True to transform input image when calling __get__
 def get_epill_dataset(fold=None, use_epill_transforms=None, use_dinov1_norm=None, crop_transforms=None):
@@ -48,6 +56,9 @@ class EPillDataset(Dataset):
         self.label_index_keys = None
         self.labels = []
         self.images = []
+        self.image_features= []
+        self.class_id_to_str = {}
+        self.class_str_to_id = {}
         self.dinov1_norm = T.Compose([
             #T.Resize((224,224)),
             #T.ToTensor(),
@@ -74,14 +85,76 @@ class EPillDataset(Dataset):
         le.fit(ids)
         ids = list(le.transform(ids))
         for i, id in enumerate(ids):
+            if id not in self.class_id_to_str:
+                self.class_id_to_str[id] = self.labels[i][1]
+            if self.labels[i][1] not in self.class_str_to_id:
+                self.class_str_to_id[self.labels[i][1]] = id
             self.labels[i][1] = id
 
         # set images as list of torch tensors 
         for label in self.labels:
             imgs_path = 'datasets/ePillID_data/classification_data/'
-            #img = read_image(imgs_path+label[7])
-            img = Image.open(imgs_path+label[7]).convert('RGB')
+            img = read_image(imgs_path+label[7])
+            #img = Image.open(imgs_path+label[7]).convert('RGB')
             self.images.append(img)
+
+    def getOriginalImage(self, idx):
+        Images = self.images[idx]
+        return Images
+                        
+    def getImagePath(self, idx):
+        return None
+
+    def extract_features(self,model, data_loader, use_cuda=True, multiscale=False):
+        metric_logger = utils.MetricLogger(delimiter="  ")
+        features = None
+        # for samples, index in metric_logger.log_every(data_loader, 10):
+        for Image_features,labels,image, index in metric_logger.log_every(data_loader, 10):
+            samples = image
+            samples = samples.cuda(non_blocking=True)
+            index = index.cuda(non_blocking=True)
+            if multiscale:
+                feats = utils.multi_scale(samples, model)
+            else:
+                feats = model(samples).clone()
+
+            # init storage feature matrix
+            if dist.get_rank() == 0 and features is None:
+                features = torch.zeros(len(data_loader.dataset), feats.shape[-1])
+                if use_cuda:
+                    features = features.cuda(non_blocking=True)
+                print(f"Storing features into tensor of shape {features.shape}")
+
+            # get indexes from all processes
+            y_all = torch.empty(dist.get_world_size(), index.size(0), dtype=index.dtype, device=index.device)
+            y_l = list(y_all.unbind(0))
+            y_all_reduce = torch.distributed.all_gather(y_l, index, async_op=True)
+            y_all_reduce.wait()
+            index_all = torch.cat(y_l)
+
+            # share features between processes
+            feats_all = torch.empty(
+                dist.get_world_size(),
+                feats.size(0),
+                feats.size(1),
+                dtype=feats.dtype,
+                device=feats.device,
+            )
+            output_l = list(feats_all.unbind(0))
+            output_all_reduce = torch.distributed.all_gather(output_l, feats, async_op=True)
+            output_all_reduce.wait()
+
+            # update storage feature matrix
+            if dist.get_rank() == 0:
+                if use_cuda:
+                    features.index_copy_(0, index_all, torch.cat(output_l))
+                else:
+                    features.index_copy_(0, index_all.cpu(), torch.cat(output_l).cpu())
+        
+        for f in features:
+            self.image_features.append(f.cpu().numpy())
+
+        self.isDataTransformed = True  
 
     def __len__(self):
         assert len(self.images) == len(self.labels), f"Number of images does not match number of labels for {type(self).__name__}"
@@ -92,12 +165,17 @@ class EPillDataset(Dataset):
         label = self.labels[idx][1] # pilltype_id
         is_front = self.labels[idx][5]
         is_ref = self.labels[idx][4]
+        Image_features = []
 
         #img = EPillDataset.epill_transforms(img)
-        #img = img.float()
-        #img = self.dinov1_norm(img)
-        img = self.img_preprocessing_fn(img)
-        return img, idx
+        img = img.float()
+        img = self.dinov1_norm(img)
+        #img = self.img_preprocessing_fn(img)
+
+        if len(self.image_features)==len(self):
+            Image_features = self.image_features[idx]
+        
+        return Image_features, label, img, idx
 
     def old__getitem__(self, idx):
         img = self.images[idx]
