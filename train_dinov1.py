@@ -34,6 +34,7 @@ import dino.utils as utils
 import dino.vision_transformer as vits
 from dino.vision_transformer import DINOHead
 from dataset_builders_2 import EPillDataset
+from dataset_builders_2 import get_epill_dataset
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
@@ -88,9 +89,9 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=32, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=64, type=int,
         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
-    parser.add_argument('--epochs', default=10, type=int, help='Number of epochs of training.')
+    parser.add_argument('--epochs', default=300, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
         during which we keep the output layer fixed. Typically doing so during
         the first epoch helps training. Try increasing this value if the loss does not decrease.""")
@@ -120,7 +121,7 @@ def get_args_parser():
     # Misc
     parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default="dinov1_train_result", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="dinov1_train_result_new", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=1, type=int, help='Number of data loading workers per GPU.')
@@ -143,9 +144,10 @@ def train_dino(args):
         args.local_crops_scale,
         args.local_crops_number,
     )
-    path_folds = 'datasets/ePillID_data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/'
-    dataset=EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv', img_preprocessing_fn=transform)
+    #path_folds = 'datasets/ePillID_data/folds/pilltypeid_nih_sidelbls0.01_metric_5folds/base/'
+    #dataset=EPillDataset(path_folds+'pilltypeid_nih_sidelbls0.01_metric_5folds_all.csv')
     #dataset = datasets.ImageFolder(args.data_path, transform=transform)
+    dataset = get_epill_dataset('fold_3', use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None)  
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -306,7 +308,8 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
                     fp16_scaler, args):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
-    for it, (images, _) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    for it, (_, _, images,_ ,_) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+        #print("+++++++images size:", images.size())
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):
@@ -318,9 +321,20 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
         images = [im.cuda(non_blocking=True) for im in images]
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
-
-            teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher
-            student_output = student(images)
+            img2 = images[:2]
+            img = torch.zeros(2, 3, 224, 224)
+            img[0] = img2[0]
+            img[1] = img2[1]
+            img = img.half()
+            img = img.to("cuda")
+            #print("===img size===", img.size())
+            teacher_output = teacher(img)  # only the 2 global views pass through the teacher
+            img = torch.zeros(len(images), 3, 224, 224)
+            for im in range(len(images)):
+                img[im] = images[im]
+            img =img.half()
+            img = img.to("cuda")
+            student_output = student(img)
             loss = dino_loss(student_output, teacher_output, epoch)
 
         if not math.isfinite(loss.item()):

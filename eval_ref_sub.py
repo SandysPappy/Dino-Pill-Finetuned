@@ -21,19 +21,9 @@ import torch.nn.functional as F
 from myutils import metrics
 from torch.utils.data import DataLoader
 from dataset_builders_2 import get_epill_dataset
-
-def initDinoV2Model(model="dino_vits8"):
-    dinov2_model = torch.hub.load("facebookresearch/dino", model)
-    return dinov2_model
-'''
-def get_dino_transforms():
-    return transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-'''
-def initDinoV1Model(model_to_load, FLAGS, checkpoint_key="teacher", use_back_bone_only=False):
+from dino.vision_transformer import vit_small
+from empty_model import MLP
+def initDinoV1Model(model_to_load, FLAGS, checkpoint_key="teacher", use_back_bone_only=True):
     dino_args.pretrained_weights = model_to_load
     dino_args.output_dir = FLAGS.log_dir
     dino_args.checkpoint_key = checkpoint_key
@@ -70,7 +60,7 @@ if __name__=="__main__":
                         help='dino based model weights')
     parser.add_argument('--dino_custom_model_weights',
                         type=str,
-                        default="./dinov1_train_result/checkpoint.pth",
+                        default="./dinov1_train_result_new/checkpoint.pth",
                         help='dino based model weights')
     parser.add_argument('--search_gallery',
                         type=str,
@@ -104,16 +94,13 @@ if __name__=="__main__":
 
     utils.init_distributed_mode(args=FLAGS)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     TEST_SPLIT_FOR_ZERO_SHOT_RETRIEVAL = 0.7
     SEED_FOR_RANDOM_SPLIT = 43
 
-    
-    #dinov1_model = initDinoV1Model(model_to_load=FLAGS.dino_base_model_weights,FLAGS=FLAGS,checkpoint_key="teacher")
 
-    dinov2_model = initDinoV2Model().to(device)
-    dinov2_model.eval()
+    dinov1_model = initDinoV1Model(model_to_load=FLAGS.dino_base_model_weights,FLAGS=FLAGS,checkpoint_key="teacher")
+    #dinov1_model = vit_small(patch_size=17).to("cuda")
+    #dinov1_model = MLP().to("cuda")
     '''
     data_path = "./data/ePillID_data/classification_data/segmented_nih_pills_224/"
     dinov1_transform = T.Compose([    
@@ -134,10 +121,9 @@ if __name__=="__main__":
 
     print("result:", pred)
     '''
-   # dinov2_transform = get_dino_transforms()
 
-    dataset = get_epill_dataset('refs', use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None)
-    test_dataset = get_epill_dataset('holdout', use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None) 
+    dataset = get_epill_dataset('refs', use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None, do_ocr = False)
+    test_dataset = get_epill_dataset('holdout', use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None, do_ocr=False) 
 
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=False)
     data_loader_train = torch.utils.data.DataLoader(
@@ -155,7 +141,8 @@ if __name__=="__main__":
         pin_memory=True,
         drop_last=False,
     )
-
+ 
+    
     #ref_data = get_epill_dataloader('refs', FLAGS.batch_size, use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None)
     #holdout_data = get_epill_dataloader('holdout', FLAGS.batch_size, use_epill_transforms=None, use_dinov1_norm=True, crop_transforms=None)
 
@@ -218,26 +205,26 @@ if __name__=="__main__":
     '''
 
     ref_labels = dataset.ids
+    ref_info = dataset.labels
+    #ref_ocr = dataset.ocr_res
+    print("len ref_labels:", len(ref_labels))
     holdout_labels = test_dataset.ids
+    holdout_info = test_dataset.labels
+    #holdout_ocr = test_dataset.ocr_res
+    print("len holdout_labels:", len(holdout_labels))
 
-    ref_all_labels = dataset.labels
-    holdout_all_labels = test_dataset.labels
-    ref_is_front=[]
-    holdout_is_front=[]
-    for i in ref_all_labels:
-        ref_is_front.append(i[5])
-    for i in holdout_all_labels:
-        holdout_is_front.append(i[5])
-
-    dataset.extract_features(dinov2_model,data_loader=data_loader_train)
-    test_dataset.extract_features(dinov2_model,data_loader=data_loader_query)
+    dataset.extract_features(dinov1_model,data_loader=data_loader_train)
+    test_dataset.extract_features(dinov1_model,data_loader=data_loader_query)
 
     ref_features = []
     holdout_features = []
     for i in range(len(dataset)):
-        ref_features.append(dataset.image_features[i])
+        if ref_labels[i] in holdout_labels:
+            ref_features.append(dataset.image_features[i])
     for i in range(len(test_dataset)):
         holdout_features.append(test_dataset.image_features[i])
+    print("ref len",len(ref_features) )
+    print("hold out", len(holdout_features))
 
     ref_features = torch.from_numpy(np.array(ref_features))
     holdout_features = torch.from_numpy(np.array(holdout_features))
@@ -303,40 +290,63 @@ if __name__=="__main__":
     #print(D)
     D, I = index.search(holdout_features, k)     # actual search
 
-    a_list =[]
-    p_list =[]
-
+    a_list = []
+    a_img = []
+    p_list = []
+    p_img = []
+    lcID_list = []
+    pcID_list = []
+    #print("I:", I)
+    #print("len I", len(I))
+    
     for i in I:
         temp=[]
+        #temp_lc=[]
+        #temp_pc=[]
         for idx in i:
-            temp.append(ref_labels[idx])        
+            temp.append(ref_labels[idx])
+            p_img.append(ref_info[idx][7])
+            #temp_lc.append(ref_info[idx][2])
+            #temp_pc.append(ref_info[idx][3])
         p_list.append(temp)
+        #lcID_list.append(temp_lc)
+        #pcID_list.append(temp_pc)
     for i in holdout_labels:
         a_list.append([i])
     #for i in predict_list:
     #    p_list.append([i])
     #p_list = predict_list
-    c = 0
-    total = 0
+    '''
+    merged_list = []
     for i in range(745):
-        print("p_list[i]:", p_list[i])
-        print("a_list[i]:", a_list[i], "is front:", holdout_is_front[i])
+        query_lc = lcID_list[i]
+        query_pc = pcID_list[i]
+        match = []
+        unmatch = []
+        for j in range(len(query_lc)):
+            if query_lc[j] == holdout_ocr[i] or query_pc[j] == holdout_ocr[i]:
+                match.append(p_list[i][j])
+            else:
+                unmatch.append(p_list[i][j])
+            merge = match + unmatch
+            merge = merge[:FLAGS.topK]
+        merged_list.append(merge)
+    '''
+    c = 0
+    for i in range(745):
+        print("p_list[i]:", p_list[i], "img:", p_img[i])
+        print("a_list[i]:", a_list[i], "img", holdout_info[i][7])
         if p_list[i][0] == a_list[i][0]:
             c+=1
-        total+=1
     print("c:", c)
-    print("total:", total)
-    print("p_list len:", len(p_list))
+    print("merged_list len:", len(p_list))
     print("a_list len:", len(a_list))
     
     Map_result = metrics.mapk(a_list, p_list)
-    print("MAP score:", Map_result)
-    
-    
+    print("MAP score:", Map_result) 
 
-
-    
-
+    print("ref len",len(ref_features) )
+    print("hold out len", len(holdout_features))
 
 
 
