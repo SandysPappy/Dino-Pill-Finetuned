@@ -32,7 +32,7 @@ conda install ipykernel
 # Setting up the env by PIP
  pip install -r requirements.txt
 
- #Trian
+#Trian
 
  DINOv1: run python -m torch.distributed.run --nproc_per_node=1 train_dinov1.py
  DINOv2: run python -m torch.distributed.run --nproc_per_node=1 train_dinov2.py
