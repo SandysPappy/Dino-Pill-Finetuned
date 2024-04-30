@@ -28,3 +28,19 @@ conda install ipykernel
     - change np.bool in this file to np.bool_
 
     - cd /anaconda3/envs/epill/lib/python3.9/site-packages/imgaug/augmenters/meta.py
+
+# Setting up the env by PIP
+ pip install -r requirements.txt
+
+ #Trian
+
+ DINOv1: run python -m torch.distributed.run --nproc_per_node=1 train_dinov1.py
+ DINOv2: run python -m torch.distributed.run --nproc_per_node=1 train_dinov2.py
+
+#Evaluation
+
+DINOv1: run python eval_ePillID.py 
+DINOv2: run python eval_ePillIDv2.py
+
+
+
